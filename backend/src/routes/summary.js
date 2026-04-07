@@ -3,40 +3,51 @@ import { Router } from 'express';
 export default function summaryRouter(db) {
   const router = Router();
 
-  // GET /tracker/api/summary
-  router.get('/', (_req, res) => {
+  // GET /tracker/api/summary?user_id=
+  router.get('/', (req, res) => {
+    const { user_id = 'alvin' } = req.query;
+
     const timeTotals = db.prepare(`
-      SELECT subject, SUM(duration_minutes) as total_minutes
+      SELECT subject, SUM(duration_minutes) AS total_minutes
       FROM sessions
+      WHERE user_id = ? AND deleted = 0
       GROUP BY subject
-    `).all();
+    `).all(user_id);
 
     const lessonCounts = db.prepare(`
-      SELECT subject, COUNT(*) as completed
+      SELECT subject, COUNT(*) AS completed
       FROM lessons
       WHERE completed = 1
       GROUP BY subject
     `).all();
 
     const gymVisits = db.prepare(
-      `SELECT COUNT(*) as total FROM sessions WHERE subject = 'gym'`
-    ).get().total;
+      `SELECT COUNT(*) AS total FROM sessions WHERE subject = 'gym' AND user_id = ? AND deleted = 0`
+    ).get(user_id).total;
 
-    // Consecutive gym days streak (ending today or yesterday)
-    const gymDates = db.prepare(
-      `SELECT DISTINCT date FROM sessions WHERE subject = 'gym' ORDER BY date DESC`
-    ).all().map(r => r.date);
+    // Consecutive gym-day streak
+    const gymDates = db.prepare(`
+      SELECT DISTINCT date FROM sessions
+      WHERE subject = 'gym' AND user_id = ? AND deleted = 0
+      ORDER BY date DESC
+    `).all(user_id).map(r => r.date);
 
     let gymStreak = 0;
     if (gymDates.length) {
-      const today = new Date().toISOString().slice(0, 10);
-      // Allow streak to count if last session was today or yesterday
-      let cursor = new Date(gymDates[0] <= today ? gymDates[0] : today);
-      for (const d of gymDates) {
-        const expected = new Date(cursor);
-        expected.setDate(expected.getDate() - gymStreak);
-        if (d === expected.toISOString().slice(0, 10)) gymStreak++;
-        else break;
+      const todayStr = new Date().toISOString().slice(0, 10);
+      // Allow streak if last session is today or yesterday
+      const mostRecent = gymDates[0];
+      const diff = Math.round(
+        (new Date(todayStr) - new Date(mostRecent)) / 86400000
+      );
+      if (diff <= 1) {
+        let expected = new Date(mostRecent);
+        for (const d of gymDates) {
+          if (d === expected.toISOString().slice(0, 10)) {
+            gymStreak++;
+            expected.setDate(expected.getDate() - 1);
+          } else break;
+        }
       }
     }
 
